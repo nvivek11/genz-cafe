@@ -105,6 +105,17 @@
   .status{font-weight:900; padding:3px 11px; border-radius:999px; font-size:12.5px; background:#ffe9b0; color:#7a5200}
   .status.ready{background:#c9f5da; color:#0d6b38; animation:pulseGlow 1.6s infinite}
   .status.served{background:#e6e0d5; color:#5c5344}
+  .status.cancelled{background:#f3d9d9; color:#8f1010}
+  .wheel-wrap{position:relative;width:230px;height:230px;margin:8px auto}
+  #dish-wheel{width:230px;height:230px;border-radius:50%;border:6px solid var(--maroon);transition:transform 4.2s cubic-bezier(.12,.8,.16,1);position:relative;overflow:hidden;background:#f6e7c8}
+  .wheel-label{position:absolute;left:50%;top:50%;width:104px;margin-left:-52px;text-align:center;font-size:11.5px;font-weight:700;color:#4a240f;transform-origin:50% 0}
+  .wheel-pointer{position:absolute;top:-8px;left:50%;transform:translateX(-50%);font-size:26px;z-index:2}
+  .mem-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;max-width:340px;margin:10px auto}
+  .mem-card{aspect-ratio:1;border:none;border-radius:14px;background:var(--maroon);font-size:30px;cursor:pointer;color:#fff}
+  .mem-card.open,.mem-card.done{background:#ffe9b8;cursor:default}
+  #catch-area{position:relative;height:250px;background:linear-gradient(#fff6e0,#ffe9b8);border-radius:16px;overflow:hidden;touch-action:none}
+  .catch-food{position:absolute;font-size:30px;user-select:none}
+  #catch-plate{position:absolute;bottom:4px;font-size:38px;user-select:none;transform:translateX(-50%)}
   .loyalty{border-radius:24px; padding:22px; color:#fff; position:relative; overflow:hidden;
     background:linear-gradient(120deg,var(--maroon2),var(--maroon) 55%,#a31621)}
   .loyalty::after{content:''; position:absolute; inset:0;
@@ -152,9 +163,6 @@
     <p class="muted" style="margin-top:0">Ek button chuno — yahi login hai</p>
     <button class="social-btn" onclick="socialStart('google')">
       <span style="font-weight:900;color:#4285F4">G</span> Google Se Login
-    </button>
-    <button class="social-btn dark" onclick="socialStart('apple')">
-      <span></span> Apple Se Login
     </button>
     
 
@@ -314,6 +322,21 @@
   </div>
 </div>
 
+<!-- Payment sheet -->
+<div id="pay-sheet" class="sheet hidden">
+  <div class="sheet-box center">
+    <div class="row-flex" style="justify-content:space-between">
+      <h2 style="color:var(--maroon)">&#128179; Payment Karo</h2>
+      <button class="btn ghost small" onclick="closePay()">Band Karo &#10005;</button>
+    </div>
+    <p>Amount: <b id="pay-amount">&#8377;0</b></p>
+    <img id="pay-qr-img" class="hidden" style="max-width:260px;width:100%;border-radius:16px;margin:6px auto">
+    <p id="pay-qr-note" class="muted"></p>
+    <div id="pay-msg"></div>
+    <button class="btn gold" style="width:100%" onclick="confirmPaid()">&#9989; Payment Kar Diya</button>
+  </div>
+</div>
+
 <!-- ================= ADMIN APP ================= -->
 <div id="view-admin" class="hidden">
   <div class="topbar">
@@ -417,6 +440,15 @@
         <button class="btn gold" style="width:100%" onclick="saveWifi()">💾 Wi-Fi Save Karo</button>
       </div>
       <div class="card">
+        <h3 style="color:var(--maroon)">&#128179; Payment QR (Customer Payment Ke Liye)</h3>
+        <div id="payqr-msg"></div>
+        <p class="muted">Apna UPI payment QR yahan upload karo — customer Pay dabane par yehi QR dekhega, aur payment ke baad tum Kitchen mein approve karoge.</p>
+        <input id="pf-photo" type="file" accept="image/*">
+        <img id="pf-preview" class="thumb-preview hidden">
+        <button class="btn ghost small hidden" id="pf-remove" onclick="removePayQr()">QR Hatao</button>
+        <button class="btn gold" style="width:100%;margin-top:10px" onclick="savePayQr()">&#128190; QR Save Karo</button>
+      </div>
+      <div class="card">
         <h3 style="color:var(--maroon)">🔑 Admin Password Badlo</h3>
         <div id="chpw-msg"></div>
         <label>Current Password</label>
@@ -438,7 +470,7 @@ let DISHES = [], OFFERS = [];
 let cart = {}; // dishId -> qty
 let activeCat = 'Sab';
 let provider = 'google';
-let dishImageData = '', offerImageData = '';
+let dishImageData = '', offerImageData = '', payQrImageData = '', PAYQR = '';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -497,9 +529,8 @@ async function loadState() {
 }
 // ================= Gate =================
 function socialStart(p) {
-  provider = p;
-  if (p === 'google') { window.location.href = '/auth/google'; return; }
-  openSetupBox();
+  provider = 'google';
+  window.location.href = '/auth/google';
 }
 function openSetupBox() {
   $('setup-box').classList.remove('hidden');
@@ -575,6 +606,7 @@ async function refreshMe() {
     me = r.customer;
     $('wifi-name').textContent = (r.wifi && r.wifi.wifiName) || '—';
     $('wifi-pass').textContent = (r.wifi && r.wifi.wifiPassword) || '—';
+    PAYQR = (r.payment && r.payment.qr) || '';
     renderPoints();
   } catch (e) {}
 }
@@ -673,7 +705,9 @@ async function placeOrder() {
   } catch (e) { showErr('order-msg', e.message); }
 }
 // ================= Customer: orders / points =================
-const STATUS_HI = { placed: 'Order Mil Gaya', preparing: 'Ban Raha Hai', ready: 'READY hai!', served: 'Mil Gaya' };
+const STATUS_HI = { placed: 'Order Mil Gaya', preparing: 'Ban Raha Hai', ready: 'READY hai!', served: 'Mil Gaya', cancelled: '\u274C Cancel Ho Gaya' };
+function payStateOf(o) { return o.payState || (o.paid ? 'paid' : 'unpaid'); }
+const PAY_LABEL = { paid: '\u2705 Paid', pending: '\u23F3 Approval Baaki', unpaid: '\u{1F4B5} Unpaid' };
 function orderCard(o, admin) {
   const items = o.items.map((i) => esc(i.name) + ' x ' + i.qty).join(', ');
   return '<div class="order-card"><div class="row-flex" style="justify-content:space-between">' +
@@ -682,20 +716,42 @@ function orderCard(o, admin) {
     '<div class="muted" style="font-size:13px">' + new Date(o.date).toLocaleString('hi-IN') +
     (admin ? ' - ' + esc(o.customerName) + ' (' + esc(o.mobile) + ')' : '') + '</div>' +
     '<div class="row-flex" style="justify-content:space-between;margin-top:6px"><b>Total: ' + rupee(o.total) + '</b>' +
-    '<span>' + (o.paid ? 'Paid' : 'Unpaid') + '</span></div></div>';
+    '<span>' + (PAY_LABEL[payStateOf(o)] || '') + '</span></div></div>';
 }
 async function loadMyOrders() {
   try {
     const r = await api('/api/customer/orders');
-    $('my-orders').innerHTML = r.orders.slice().reverse().map((o) =>
-      orderCard(o, false) +
-      (!o.paid && !o.freeReward ? '<button class="btn small gold" style="margin:-4px 0 10px" onclick="payOrder(' + o.id + ')">Pay Karo</button>' : '')
-    ).join('') || '<p class="muted">Abhi tak koi order nahi hai.</p>';
+    $('my-orders').innerHTML = r.orders.slice().reverse().map((o) => {
+      const ps = payStateOf(o);
+      return orderCard(o, false) +
+        (ps === 'unpaid' && !o.freeReward ? '<button class="btn small gold" style="margin:-4px 0 10px" onclick="openPay(' + o.id + ',' + o.total + ')">\u{1F4B3} Pay Karo</button>' : '') +
+        (ps === 'pending' ? '<div class="ok" style="margin:-4px 0 10px">\u23F3 Payment bhej diya hai — admin approval ka wait ho raha hai</div>' : '');
+    }).join('') || '<p class="muted">Abhi tak koi order nahi hai.</p>';
   } catch (e) { $('my-orders').innerHTML = '<div class="err">' + esc(e.message) + '</div>'; }
 }
-async function payOrder(id) {
-  try { await api('/api/customer/pay', 'POST', { orderId: id }); loadMyOrders(); }
-  catch (e) { alert(e.message); }
+let payOrderId = null;
+function openPay(id, total) {
+  payOrderId = id;
+  $('pay-amount').textContent = rupee(total);
+  if (PAYQR) {
+    $('pay-qr-img').src = PAYQR;
+    $('pay-qr-img').classList.remove('hidden');
+    $('pay-qr-note').textContent = 'Is QR ko scan karke payment karo. Payment ke baad neeche wala button dabao — admin approve karega, tab order Paid hoga.';
+  } else {
+    $('pay-qr-img').classList.add('hidden');
+    $('pay-qr-note').textContent = 'Admin ne abhi payment QR upload nahi kiya hai — counter par payment karke neeche wala button dabao.';
+  }
+  showErr('pay-msg', '');
+  $('pay-sheet').classList.remove('hidden');
+}
+function closePay() { $('pay-sheet').classList.add('hidden'); }
+async function confirmPaid() {
+  try {
+    await api('/api/customer/pay', 'POST', { orderId: payOrderId });
+    closePay();
+    loadMyOrders();
+    alert('Payment bhej diya! Admin approve karega to order Paid ho jayega.');
+  } catch (e) { showErr('pay-msg', e.message); }
 }
 async function doTrack() {
   const num = $('track-num').value.trim();
@@ -784,6 +840,8 @@ async function loadAdminData() {
     renderAdminDishes(); renderAdminOffers(); renderAdminCustomers();
     $('set-wifi-name').value = r.settings.wifiName || '';
     $('set-wifi-pass').value = r.settings.wifiPassword || '';
+    payQrImageData = r.settings.payQr || '';
+    if (payQrImageData) { $('pf-preview').src = payQrImageData; $('pf-preview').classList.remove('hidden'); $('pf-remove').classList.remove('hidden'); }
     loadKitchen();
   } catch (e) { alert(e.message); }
 }
@@ -802,6 +860,7 @@ function updateDishCalc() {
 ['df-mrp', 'df-pct'].forEach((id) => document.addEventListener('input', (e) => { if (e.target.id === id) updateDishCalc(); }));
 document.addEventListener('change', (e) => {
   if (e.target.id === 'df-photo') fileToDataUrl(e.target, (d) => { dishImageData = d; $('df-preview').src = d; $('df-preview').classList.remove('hidden'); $('df-photo-remove').classList.remove('hidden'); });
+  if (e.target.id === 'pf-photo') fileToDataUrl(e.target, (d) => { payQrImageData = d; $('pf-preview').src = d; $('pf-preview').classList.remove('hidden'); $('pf-remove').classList.remove('hidden'); });
   if (e.target.id === 'of-photo') fileToDataUrl(e.target, (d) => { offerImageData = d; $('of-preview').src = d; $('of-preview').classList.remove('hidden'); $('of-photo-remove').classList.remove('hidden'); });
 });
 function removeDishPhoto() { dishImageData = ''; $('df-photo').value = ''; $('df-preview').classList.add('hidden'); $('df-photo-remove').classList.add('hidden'); }
@@ -919,7 +978,9 @@ async function loadKitchen() {
       orderCard(o, true) +
       '<div class="row-flex" style="margin:-4px 0 12px">' +
       (NEXT_STATUS[o.status] ? '<button class="btn small gold" onclick="advanceStatus(' + o.id + ',\'' + NEXT_STATUS[o.status] + '\')">' + NEXT_LABEL[o.status] + '</button>' : '') +
-      (!o.paid ? '<button class="btn small" onclick="adminPay(' + o.id + ')">Paid Mark Karo</button>' : '') +
+      (payStateOf(o) === 'pending' ? '<button class="btn small gold" onclick="adminPayApprove(' + o.id + ')">\u2705 Payment Approve Karo</button>' + '<button class="btn small ghost" onclick="adminPayReject(' + o.id + ')">Reject</button>' : '') +
+      (payStateOf(o) === 'unpaid' ? '<button class="btn small" onclick="adminPay(' + o.id + ')">\u{1F4B5} Paid Mark Karo (Cash)</button>' : '') +
+      (o.status !== 'served' && o.status !== 'cancelled' ? '<button class="btn small ghost" onclick="adminCancel(' + o.id + ')">\u{1F6AB} Order Cancel</button>' : '') +
       '</div>'
     ).join('') || '<p class="muted">Abhi koi order nahi hai.</p>';
   } catch (e) {}
@@ -930,6 +991,17 @@ async function advanceStatus(id, status) {
 async function adminPay(id) {
   try { await api('/api/admin/orders/pay', 'POST', { id }); loadKitchen(); } catch (e) { alert(e.message); }
 }
+async function adminPayApprove(id) {
+  try { await api('/api/admin/orders/pay-approve', 'POST', { id }); loadKitchen(); } catch (e) { alert(e.message); }
+}
+async function adminPayReject(id) {
+  if (!confirm('Payment reject kar dein? Customer ko phir se pay karna hoga.')) return;
+  try { await api('/api/admin/orders/pay-reject', 'POST', { id }); loadKitchen(); } catch (e) { alert(e.message); }
+}
+async function adminCancel(id) {
+  if (!confirm('Pakka? Ye order cancel ho jayega.')) return;
+  try { await api('/api/admin/orders/cancel', 'POST', { id }); loadKitchen(); } catch (e) { alert(e.message); }
+}
 // --- Customers ---
 function renderAdminCustomers() {
   $('admin-customers').innerHTML = ADMIN.customers.length
@@ -938,6 +1010,17 @@ function renderAdminCustomers() {
     : '<p class="muted">Abhi koi customer nahi hai.</p>';
 }
 // --- Settings ---
+async function savePayQr() {
+  try {
+    await api('/api/admin/settings', 'POST', { payQr: payQrImageData });
+    $('payqr-msg').innerHTML = '<div class="ok">Payment QR save ho gaya!</div>';
+  } catch (e) { showErr('payqr-msg', e.message); }
+}
+async function removePayQr() {
+  payQrImageData = '';
+  $('pf-preview').classList.add('hidden'); $('pf-remove').classList.add('hidden');
+  try { await api('/api/admin/settings', 'POST', { payQr: '' }); $('payqr-msg').innerHTML = '<div class="ok">QR hata diya gaya.</div>'; } catch (e) { showErr('payqr-msg', e.message); }
+}
 async function saveWifi() {
   showErr('wifi-msg', '');
   try {
