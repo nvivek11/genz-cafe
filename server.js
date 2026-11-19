@@ -39,7 +39,7 @@ function seedData() {
     offers: [],
     customers: [],
     orders: [],
-    settings: { wifiName: '', wifiPassword: '' },
+    settings: { wifiName: '', wifiPassword: '', payQr: '' },
     nextId: { dish: dishes.length + 1, offer: 1, customer: 1, order: 1 },
   };
 }
@@ -326,7 +326,7 @@ async function api(req, res, url) {
     if (!cust) return send(res, 401, { error: 'Login session khatm — phir login karo' });
 
     if (p === '/api/customer/me' && req.method === 'GET') {
-      return send(res, 200, { customer: publicCustomer(cust), wifi: DB.settings });
+      return send(res, 200, { customer: publicCustomer(cust), wifi: DB.settings, payment: { qr: DB.settings.payQr || '' } });
     }
     if (p === '/api/customer/orders' && req.method === 'GET') {
       return send(res, 200, { orders: DB.orders.filter((o) => o.customerId === cust.id) });
@@ -351,7 +351,7 @@ async function api(req, res, url) {
       const order = {
         id, number: 'GZ-' + (1000 + id), customerId: cust.id,
         customerName: cust.name, mobile: cust.mobile,
-        items, total, mrpTotal, status: 'placed', paid: false,
+        items, total, mrpTotal, status: 'placed', paid: false, payState: 'unpaid',
         pointsEarned: earned, freeReward: false,
         date: new Date().toISOString(),
       };
@@ -366,7 +366,9 @@ async function api(req, res, url) {
     if (p === '/api/customer/pay' && req.method === 'POST') {
       const o = DB.orders.find((x) => x.id === Number(body.orderId) && x.customerId === cust.id);
       if (!o) return send(res, 404, { error: 'Order nahi mila' });
-      o.paid = true;
+      const ps = o.payState || (o.paid ? 'paid' : 'unpaid');
+      if (ps !== 'unpaid') return send(res, 400, { error: 'Payment pehle se process mein hai' });
+      o.payState = 'pending';
       saveData(DB);
       return send(res, 200, { order: o });
     }
@@ -384,7 +386,7 @@ async function api(req, res, url) {
         id, number: 'GZ-' + (1000 + id), customerId: cust.id,
         customerName: cust.name, mobile: cust.mobile,
         items: [{ dishId: 0, name: '🎁 Free Dish (Points Reward)', price: 0, qty: 1 }],
-        total: 0, mrpTotal: 0, status: 'placed', paid: true,
+        total: 0, mrpTotal: 0, status: 'placed', paid: true, payState: 'paid',
         pointsEarned: 0, freeReward: true, date: new Date().toISOString(),
       };
       DB.orders.push(order);
@@ -496,7 +498,37 @@ async function api(req, res, url) {
     if (p === '/api/admin/orders/pay' && req.method === 'POST') {
       const o = DB.orders.find((x) => x.id === Number(body.id));
       if (!o) return send(res, 404, { error: 'Order nahi mila' });
-      o.paid = true;
+      o.paid = true; o.payState = 'paid';
+      saveData(DB);
+      return send(res, 200, { order: o });
+    }
+    if (p === '/api/admin/orders/pay-approve' && req.method === 'POST') {
+      const o = DB.orders.find((x) => x.id === Number(body.id));
+      if (!o) return send(res, 404, { error: 'Order nahi mila' });
+      o.payState = 'paid'; o.paid = true;
+      saveData(DB);
+      return send(res, 200, { order: o });
+    }
+    if (p === '/api/admin/orders/pay-reject' && req.method === 'POST') {
+      const o = DB.orders.find((x) => x.id === Number(body.id));
+      if (!o) return send(res, 404, { error: 'Order nahi mila' });
+      o.payState = 'unpaid'; o.paid = false;
+      saveData(DB);
+      return send(res, 200, { order: o });
+    }
+    if (p === '/api/admin/orders/cancel' && req.method === 'POST') {
+      const o = DB.orders.find((x) => x.id === Number(body.id));
+      if (!o) return send(res, 404, { error: 'Order nahi mila' });
+      if (o.status === 'cancelled') return send(res, 400, { error: 'Order pehle se cancel hai' });
+      o.status = 'cancelled';
+      if (o.freeReward && !o.refunded) {
+        const cst = DB.customers.find((x) => x.id === o.customerId);
+        if (cst) {
+          cst.points += 200;
+          cst.history.unshift({ text: 'Free dish cancel - points wapas (' + o.number + ')', points: 200, date: new Date().toISOString().slice(0, 10) });
+          o.refunded = true;
+        }
+      }
       saveData(DB);
       return send(res, 200, { order: o });
     }
@@ -508,8 +540,9 @@ async function api(req, res, url) {
       });
     }
     if (p === '/api/admin/settings' && req.method === 'POST') {
-      DB.settings.wifiName = String(body.wifiName || '').slice(0, 60);
-      DB.settings.wifiPassword = String(body.wifiPassword || '').slice(0, 60);
+      if ('wifiName' in body) DB.settings.wifiName = String(body.wifiName || '').slice(0, 60);
+      if ('wifiPassword' in body) DB.settings.wifiPassword = String(body.wifiPassword || '').slice(0, 60);
+      if ('payQr' in body) DB.settings.payQr = (typeof body.payQr === 'string' && body.payQr.startsWith('data:image/') && body.payQr.length < 3000000) ? body.payQr : '';
       saveData(DB);
       return send(res, 200, { settings: DB.settings });
     }
