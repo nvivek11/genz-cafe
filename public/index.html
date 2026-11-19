@@ -842,7 +842,9 @@ async function deleteDish(id) {
   try { await api('/api/admin/dishes/delete', 'POST', { id }); loadAdminData(); } catch (e) { alert(e.message); }
 }
 async function toggleDishAvail(id, on) {
+  
   try { await api('/api/admin/dishes/availability', 'POST', { id, available: on }); loadAdminData(); } catch (e) { alert(e.message); }
+}
 function renderAdminDishes() {
   $('admin-dishes').innerHTML = ADMIN.dishes.map((d) =>
     '<div class="list-row">' +
@@ -888,7 +890,9 @@ async function deleteOffer(id) {
   try { await api('/api/admin/offers/delete', 'POST', { id }); loadAdminData(); } catch (e) { alert(e.message); }
 }
 async function toggleOffer(id, on) {
+
   try { await api('/api/admin/offers/toggle', 'POST', { id, active: on }); loadAdminData(); } catch (e) { alert(e.message); }
+}
 function renderAdminOffers() {
   $('admin-offers').innerHTML = ADMIN.offers.map((o) =>
     '<div class="list-row">' +
