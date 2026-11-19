@@ -482,3 +482,480 @@ function fileToDataUrl(input, cb) {
   };
   img.src = url;
 }
+// ================= Views =================
+function showView(name) {
+  $('view-gate').classList.toggle('hidden', name !== 'gate');
+  $('view-customer').classList.toggle('hidden', name !== 'customer');
+  $('view-admin').classList.toggle('hidden', name !== 'admin');
+}
+async function loadState() {
+  const s = await api('/api/state');
+  DISHES = s.dishes || []; OFFERS = s.offers || [];
+  $('admin-setup-box').classList.toggle('hidden', s.adminSetupDone);
+  $('admin-login-box').classList.toggle('hidden', !s.adminSetupDone);
+  return s;
+}
+// ================= Gate =================
+function socialStart(p) {
+  provider = p;
+  $('setup-box').classList.remove('hidden');
+  $('login-box').classList.add('hidden');
+  showErr('setup-err', '');
+  $('setup-box').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+function toggleLogin() { $('login-box').classList.toggle('hidden'); }
+
+async function doRegister() {
+  showErr('setup-err', '');
+  try {
+    const r = await api('/api/customer/register', 'POST', {
+      name: $('su-name').value, mobile: $('su-mobile').value,
+      password: $('su-pass').value, provider,
+    });
+    setSession(r.token, 'customer'); me = r.customer;
+    enterCustomer();
+  } catch (e) { showErr('setup-err', e.message); }
+}
+async function doLogin() {
+  showErr('login-err', '');
+  try {
+    const r = await api('/api/customer/login', 'POST', {
+      mobile: $('li-mobile').value, password: $('li-pass').value,
+    });
+    setSession(r.token, 'customer'); me = r.customer;
+    enterCustomer();
+  } catch (e) { showErr('login-err', e.message); }
+}
+async function doAdminSetup() {
+  showErr('aset-err', '');
+  const p1 = $('aset-pass').value, p2 = $('aset-pass2').value;
+  if (p1 !== p2) return showErr('aset-err', 'Dono password ek jaise nahi hain');
+  try {
+    const r = await api('/api/admin/setup', 'POST', { password: p1 });
+    setSession(r.token, 'admin');
+    enterAdmin();
+  } catch (e) { showErr('aset-err', e.message); }
+}
+async function doAdminLogin() {
+  showErr('alog-err', '');
+  try {
+    const r = await api('/api/admin/login', 'POST', { password: $('alog-pass').value });
+    setSession(r.token, 'admin');
+    enterAdmin();
+  } catch (e) { showErr('alog-err', e.message); }
+}
+function setSession(t, r) {
+  token = t; role = r;
+  localStorage.setItem('gz_token', t);
+  localStorage.setItem('gz_role', r);
+}
+async function logout() {
+  try { await api('/api/logout', 'POST', {}); } catch (e) {}
+  token = ''; role = ''; me = null; cart = {};
+  localStorage.removeItem('gz_token'); localStorage.removeItem('gz_role');
+  await loadState().catch(() => {});
+  showView('gate');
+}
+// ================= Customer =================
+async function enterCustomer() {
+  showView('customer');
+  $('cust-hello').textContent = 'Namaste, ' + (me ? me.name.split(' ')[0] : '') + ' 🙏';
+  await loadState().catch(() => {});
+  renderOffers(); renderMenu(); updateCartBar();
+  refreshMe();
+}
+async function refreshMe() {
+  try {
+    const r = await api('/api/customer/me');
+    me = r.customer;
+    $('wifi-name').textContent = (r.wifi && r.wifi.wifiName) || '—';
+    $('wifi-pass').textContent = (r.wifi && r.wifi.wifiPassword) || '—';
+    renderPoints();
+  } catch (e) {}
+}
+function custTab(t) {
+  document.querySelectorAll('[data-ctab]').forEach((b) => b.classList.toggle('active', b.dataset.ctab === t));
+  ['menu', 'orders', 'points', 'fun'].forEach((x) => $('ctab-' + x).classList.toggle('hidden', x !== t));
+  if (t === 'orders') loadMyOrders();
+  if (t === 'points') refreshMe();
+}
+function renderOffers() {
+  const wrap = $('offers-wrap');
+  if (!OFFERS.length) { wrap.classList.add('hidden'); return; }
+  wrap.classList.remove('hidden');
+  $('offers-strip').innerHTML = OFFERS.map((o) =>
+    '<div class="offer-card">' +
+    (o.image ? '<img src="' + o.image + '" alt="">' : '') +
+    '<div class="oc-body"><h3>' + esc(o.title) + '</h3><div>' + esc(o.text) + '</div></div></div>'
+  ).join('');
+}
+function renderMenu() {
+  const cats = ['Sab'].concat([...new Set(DISHES.map((d) => d.category))]);
+  $('cat-chips').innerHTML = cats.map((c) =>
+    '<button class="chip' + (c === activeCat ? ' active' : '') + '" onclick="setCat(\'' + esc(c) + '\')">' + esc(c) + '</button>'
+  ).join('');
+  const list = DISHES.filter((d) => activeCat === 'Sab' || d.category === activeCat);
+  $('dish-grid').innerHTML = list.map((d) => {
+    const price = dishPrice(d), mrp = dishMrp(d), qty = cart[d.id] || 0;
+    const disc = mrp > price
+      ? '<span class="mrp">' + rupee(mrp) + '</span><span class="off-badge">' + d.discountPercent + '% OFF</span>'
+      : '';
+    const bachat = mrp > price ? '<div class="bachat">Bachat ' + rupee(mrp - price) + ' 🎉</div>' : '';
+    const addPart = !d.available
+      ? '<span class="band-tag">Aaj Available Nahi</span>'
+      : (qty === 0
+        ? '<button class="btn gold small" onclick="changeQty(' + d.id + ',1)">ADD +</button>'
+        : '<div class="row-flex"><button class="qty-btn" onclick="changeQty(' + d.id + ',-1)">−</button>' +
+          '<span class="qty-num">' + qty + '</span>' +
+          '<button class="qty-btn" onclick="changeQty(' + d.id + ',1)">+</button></div>');
+    return '<div class="dish">' +
+      (d.image ? '<img src="' + d.image + '" alt="">' : '<div class="emoji-big">' + esc(d.emoji || '🍽️') + '</div>') +
+      '<div class="d-body"><h3>' + esc(d.name) + ' ' + (d.popular ? '<span class="pop-badge">POPULAR</span>' : '') + '</h3>' +
+      '<div class="desc">' + esc(d.description || '') + '</div>' +
+      '<div class="price-row"><span class="price">' + rupee(price) + '</span>' + disc + '</div>' + bachat +
+      '<div class="add-row"><span class="muted" style="font-size:12px">' + esc(d.category) + '</span>' + addPart + '</div>' +
+      '</div></div>';
+  }).join('') || '<p class="muted">Is category mein koi dish nahi hai.</p>';
+}
+function setCat(c) { activeCat = c; renderMenu(); }
+function changeQty(id, delta) {
+  cart[id] = (cart[id] || 0) + delta;
+  if (cart[id] <= 0) delete cart[id];
+  renderMenu(); updateCartBar();
+}
+function cartTotals() {
+  let items = 0, total = 0, mrp = 0;
+  for (const id in cart) {
+    const d = DISHES.find((x) => x.id === +id);
+    if (!d) continue;
+    items += cart[id]; total += dishPrice(d) * cart[id]; mrp += dishMrp(d) * cart[id];
+  }
+  return { items, total, mrp, saving: mrp - total };
+}
+function updateCartBar() {
+  const t = cartTotals();
+  $('cart-bar').classList.toggle('hidden', t.items === 0);
+  $('cart-bar-text').textContent = '🛒 ' + t.items + ' items • ' + rupee(t.total) + (t.saving ? ' (Bachat ' + rupee(t.saving) + ')' : '');
+}
+function openCart() { renderCart(); $('cart-sheet').classList.remove('hidden'); }
+function closeCart() { $('cart-sheet').classList.add('hidden'); }
+function renderCart() {
+  const lines = [];
+  for (const id in cart) {
+    const d = DISHES.find((x) => x.id === +id);
+    if (!d) continue;
+    lines.push('<div class="cart-line"><span>' + esc(d.emoji || '') + ' ' + esc(d.name) + ' × ' + cart[id] + '</span><b>' + rupee(dishPrice(d) * cart[id]) + '</b></div>');
+  }
+  $('cart-lines').innerHTML = lines.join('') || '<p class="muted">Cart khaali hai</p>';
+  const t = cartTotals();
+  $('cart-summary').innerHTML =
+    (t.saving ? '<div class="cart-line"><span>MRP Total</span><span class="mrp">' + rupee(t.mrp) + '</span></div>' +
+      '<div class="cart-line"><span style="color:var(--green);font-weight:800">🎉 Tumhari Bachat</span><b style="color:var(--green)">' + rupee(t.saving) + '</b></div>' : '') +
+    '<div class="cart-line" style="font-size:18px"><span><b>Total</b></span><b>' + rupee(t.total) + '</b></div>' +
+    '<p class="muted" style="font-size:13px">Is order par ' + (Math.floor(t.total / 100) * 10) + ' points milenge ⭐</p>';
+}
+async function placeOrder() {
+  showErr('order-msg', '');
+  const items = Object.keys(cart).map((id) => ({ dishId: +id, qty: cart[id] }));
+  if (!items.length) return showErr('order-msg', 'Cart khaali hai');
+  try {
+    const r = await api('/api/customer/orders', 'POST', { items });
+    me = r.customer;
+    cart = {}; updateCartBar(); renderMenu();
+    closeCart();
+    alert('Order ho gaya! Order Number: ' + r.order.number + ' ' + r.order.pointsEarned + ' points mile');
+    custTab('orders');
+  } catch (e) { showErr('order-msg', e.message); }
+}
+// ================= Customer: orders / points =================
+const STATUS_HI = { placed: 'Order Mil Gaya', preparing: 'Ban Raha Hai', ready: 'READY hai!', served: 'Mil Gaya' };
+function orderCard(o, admin) {
+  const items = o.items.map((i) => esc(i.name) + ' x ' + i.qty).join(', ');
+  return '<div class="order-card"><div class="row-flex" style="justify-content:space-between">' +
+    '<b>' + esc(o.number) + '</b><span class="status ' + o.status + '">' + (STATUS_HI[o.status] || o.status) + '</span></div>' +
+    '<div style="margin:6px 0">' + items + '</div>' +
+    '<div class="muted" style="font-size:13px">' + new Date(o.date).toLocaleString('hi-IN') +
+    (admin ? ' - ' + esc(o.customerName) + ' (' + esc(o.mobile) + ')' : '') + '</div>' +
+    '<div class="row-flex" style="justify-content:space-between;margin-top:6px"><b>Total: ' + rupee(o.total) + '</b>' +
+    '<span>' + (o.paid ? 'Paid' : 'Unpaid') + '</span></div></div>';
+}
+async function loadMyOrders() {
+  try {
+    const r = await api('/api/customer/orders');
+    $('my-orders').innerHTML = r.orders.slice().reverse().map((o) =>
+      orderCard(o, false) +
+      (!o.paid && !o.freeReward ? '<button class="btn small gold" style="margin:-4px 0 10px" onclick="payOrder(' + o.id + ')">Pay Karo</button>' : '')
+    ).join('') || '<p class="muted">Abhi tak koi order nahi hai.</p>';
+  } catch (e) { $('my-orders').innerHTML = '<div class="err">' + esc(e.message) + '</div>'; }
+}
+async function payOrder(id) {
+  try { await api('/api/customer/pay', 'POST', { orderId: id }); loadMyOrders(); }
+  catch (e) { alert(e.message); }
+}
+async function doTrack() {
+  const num = $('track-num').value.trim();
+  $('track-result').innerHTML = '';
+  if (!num) return;
+  try {
+    const r = await api('/api/customer/track?number=' + encodeURIComponent(num));
+    $('track-result').innerHTML = orderCard(r.order, false);
+  } catch (e) { $('track-result').innerHTML = '<div class="err">' + esc(e.message) + '</div>'; }
+}
+function renderPoints() {
+  if (!me) return;
+  $('pts-balance').textContent = me.points;
+  const pct = Math.min(100, Math.round(me.points / 200 * 100));
+  $('pts-bar').style.width = pct + '%';
+  $('pts-note').textContent = me.points >= 200
+    ? 'Badhai ho! Free dish ke liye points pure hain!'
+    : 'Free dish ke liye aur ' + (200 - me.points) + ' points chahiye';
+  $('pts-history').innerHTML = (me.history || []).map((h) =>
+    '<div class="list-row"><span>' + esc(h.text) + '<br><small class="muted">' + esc(h.date) + '</small></span>' +
+    '<b style="color:' + (h.points >= 0 ? 'var(--green)' : 'var(--red)') + '">' + (h.points >= 0 ? '+' : '') + h.points + '</b></div>'
+  ).join('') || '<p class="muted">Abhi koi history nahi hai.</p>';
+}
+async function doRedeem() {
+  showErr('redeem-msg', ''); showOk('redeem-msg', '');
+  try {
+    const r = await api('/api/customer/redeem', 'POST', {});
+    me = r.customer; renderPoints();
+    showOk('redeem-msg', 'Free dish ka order lag gaya: ' + r.order.number + ' - Kitchen mein ban raha hai!');
+  } catch (e) { showErr('redeem-msg', e.message); }
+}
+// ================= Fun Zone games =================
+let tapTimer = null, tapTimeLeft = 30, tapScore = 0;
+const FOODS = ['Burger', 'Pizza', 'Fries', 'Taco', 'Donut', 'IceCream', 'Sandwich', 'Chicken'];
+function tapGameStart() {
+  tapScore = 0; tapTimeLeft = 30;
+  $('tap-score').textContent = '0'; $('tap-time').textContent = '30';
+  $('tap-msg').textContent = 'Shuru! Khana tap karo';
+  moveTapTarget();
+  clearInterval(tapTimer);
+  tapTimer = setInterval(() => {
+    tapTimeLeft--; $('tap-time').textContent = tapTimeLeft;
+    if (tapTimeLeft <= 0) {
+      clearInterval(tapTimer);
+      $('tap-target').classList.add('hidden');
+      $('tap-msg').textContent = 'Time khatm! Tumhara score: ' + tapScore;
+    }
+  }, 1000);
+}
+function moveTapTarget() {
+  const area = $('tap-area'), t = $('tap-target');
+  t.textContent = FOODS[Math.floor(Math.random() * FOODS.length)];
+  t.style.left = Math.random() * (area.clientWidth - 60) + 'px';
+  t.style.top = Math.random() * (area.clientHeight - 60) + 'px';
+  t.classList.remove('hidden');
+}
+document.addEventListener('click', (e) => {
+  if (e.target && e.target.id === 'tap-target' && tapTimeLeft > 0) {
+    tapScore++; $('tap-score').textContent = tapScore; moveTapTarget();
+  }
+});
+function luckySpin() {
+  const prizes = ['Free Slice Ki Khushi!', 'Aaj Kismat Chamkegi!', 'Dessert Day!', 'Jackpot Wali Feeling!', 'Chai Pakki!', 'Burger Mood ON!', 'Lucky Star!', 'Surprise Jaldi Milega!'];
+  const el = $('spin-result');
+  let n = 0;
+  const iv = setInterval(() => {
+    el.textContent = FOODS[Math.floor(Math.random() * FOODS.length)];
+    if (++n > 10) {
+      clearInterval(iv);
+      const p = prizes[Math.floor(Math.random() * prizes.length)];
+      el.textContent = 'Spin';
+      $('spin-msg').textContent = p;
+    }
+  }, 90);
+}
+// ================= Admin =================
+let ADMIN = { dishes: [], offers: [], customers: [], settings: {} };
+async function enterAdmin() {
+  showView('admin');
+  await loadAdminData();
+}
+async function loadAdminData() {
+  try {
+    const r = await api('/api/admin/data');
+    ADMIN = r; DISHES = r.dishes;
+    renderAdminDishes(); renderAdminOffers(); renderAdminCustomers();
+    $('set-wifi-name').value = r.settings.wifiName || '';
+    $('set-wifi-pass').value = r.settings.wifiPassword || '';
+    loadKitchen();
+  } catch (e) { alert(e.message); }
+}
+function adminTab(t) {
+  document.querySelectorAll('[data-atab]').forEach((b) => b.classList.toggle('active', b.dataset.atab === t));
+  ['menu', 'offers', 'kitchen', 'customers', 'settings'].forEach((x) => $('atab-' + x).classList.toggle('hidden', x !== t));
+  if (t === 'kitchen') loadKitchen();
+  if (t === 'customers') loadAdminData();
+}
+function updateDishCalc() {
+  const mrp = +$('df-mrp').value || 0, pct = +$('df-pct').value || 0;
+  $('df-calc').textContent = (mrp > 0 && pct > 0)
+    ? 'Discount ke baad price: ' + rupee(Math.round(mrp * (1 - pct / 100))) + ' (Bachat ' + rupee(mrp - Math.round(mrp * (1 - pct / 100))) + ')'
+    : '';
+}
+['df-mrp', 'df-pct'].forEach((id) => document.addEventListener('input', (e) => { if (e.target.id === id) updateDishCalc(); }));
+document.addEventListener('change', (e) => {
+  if (e.target.id === 'df-photo') fileToDataUrl(e.target, (d) => { dishImageData = d; $('df-preview').src = d; $('df-preview').classList.remove('hidden'); $('df-photo-remove').classList.remove('hidden'); });
+  if (e.target.id === 'of-photo') fileToDataUrl(e.target, (d) => { offerImageData = d; $('of-preview').src = d; $('of-preview').classList.remove('hidden'); $('of-photo-remove').classList.remove('hidden'); });
+});
+function removeDishPhoto() { dishImageData = ''; $('df-photo').value = ''; $('df-preview').classList.add('hidden'); $('df-photo-remove').classList.add('hidden'); }
+function removeOfferPhoto() { offerImageData = ''; $('of-photo').value = ''; $('of-preview').classList.add('hidden'); $('of-photo-remove').classList.add('hidden'); }
+function resetDishForm() {
+  $('df-id').value = ''; $('df-name').value = ''; $('df-desc').value = ''; $('df-price').value = '';
+  $('df-mrp').value = ''; $('df-pct').value = ''; $('df-emoji').value = ''; $('df-popular').checked = false;
+  $('df-available').checked = true; removeDishPhoto(); updateDishCalc();
+  $('dish-form-title').textContent = 'Nayi Dish Add Karo';
+  $('df-cancel').classList.add('hidden'); showErr('dish-msg', '');
+}
+function editDish(id) {
+  const d = ADMIN.dishes.find((x) => x.id === id); if (!d) return;
+  $('df-id').value = d.id; $('df-name').value = d.name; $('df-cat').value = d.category;
+  $('df-emoji').value = d.emoji || ''; $('df-desc').value = d.description || '';
+  $('df-price').value = d.price; $('df-mrp').value = d.originalPrice || ''; $('df-pct').value = d.discountPercent || '';
+  $('df-popular').checked = !!d.popular; $('df-available').checked = !!d.available;
+  dishImageData = d.image || '';
+  $('df-preview').classList.toggle('hidden', !dishImageData);
+  if (dishImageData) $('df-preview').src = dishImageData;
+  $('df-photo-remove').classList.toggle('hidden', !dishImageData);
+  $('dish-form-title').textContent = 'Dish Edit Karo: ' + d.name;
+  $('df-cancel').classList.remove('hidden'); updateDishCalc();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+async function saveDish() {
+  showErr('dish-msg', '');
+  const dish = {
+    id: $('df-id').value ? +$('df-id').value : undefined,
+    name: $('df-name').value, category: $('df-cat').value, emoji: $('df-emoji').value || 'Dish',
+    description: $('df-desc').value, price: +$('df-price').value || 0,
+    originalPrice: +$('df-mrp').value || 0, discountPercent: +$('df-pct').value || 0,
+    image: dishImageData, popular: $('df-popular').checked, available: $('df-available').checked,
+  };
+  try {
+    await api('/api/admin/dishes', 'POST', { dish });
+    showOk('dish-msg', 'Dish save ho gayi!');
+    resetDishForm(); loadAdminData();
+  } catch (e) { showErr('dish-msg', e.message); }
+}
+async function deleteDish(id) {
+  if (!confirm('Ye dish delete kar dein?')) return;
+  try { await api('/api/admin/dishes/delete', 'POST', { id }); loadAdminData(); } catch (e) { alert(e.message); }
+}
+async function toggleDishAvail(id, on) {
+  try { await api('/api/admin/dishes/availability', 'POST', { id, available: on }); loadAdminData(); } catch (e) { alert(e.message); }
+function renderAdminDishes() {
+  $('admin-dishes').innerHTML = ADMIN.dishes.map((d) =>
+    '<div class="list-row">' +
+    (d.image ? '<img src="' + d.image + '">' : '<span style="font-size:34px">' + esc(d.emoji || 'Dish') + '</span>') +
+    '<div style="flex:1;min-width:140px"><b>' + esc(d.name) + '</b><br><span class="muted">' + esc(d.category) + ' - ' + rupee(dishPrice(d)) +
+    ((+d.originalPrice || 0) > dishPrice(d) ? ' <span class="mrp">' + rupee(d.originalPrice) + '</span> (' + d.discountPercent + '% OFF)' : '') + '</span></div>' +
+    '<label class="switch"><input type="checkbox" ' + (d.available ? 'checked' : '') + ' onchange="toggleDishAvail(' + d.id + ',this.checked)"><span class="slider"></span></label>' +
+    '<button class="btn small ghost" onclick="editDish(' + d.id + ')">Edit</button>' +
+    '<button class="btn small" onclick="deleteDish(' + d.id + ')">Delete</button></div>'
+  ).join('') || '<p class="muted">Koi dish nahi hai.</p>';
+}
+// --- Offers ---
+function resetOfferForm() {
+  $('of-id').value = ''; $('of-title').value = ''; $('of-text').value = ''; removeOfferPhoto();
+  $('offer-form-title').textContent = 'Naya Offer Post Karo';
+  $('of-cancel').classList.add('hidden'); showErr('offer-msg', '');
+}
+function editOffer(id) {
+  const o = ADMIN.offers.find((x) => x.id === id); if (!o) return;
+  $('of-id').value = o.id; $('of-title').value = o.title; $('of-text').value = o.text || '';
+  offerImageData = o.image || '';
+  $('of-preview').classList.toggle('hidden', !offerImageData);
+  if (offerImageData) $('of-preview').src = offerImageData;
+  $('of-photo-remove').classList.toggle('hidden', !offerImageData);
+  $('offer-form-title').textContent = 'Offer Edit Karo';
+  $('of-cancel').classList.remove('hidden');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+async function saveOffer() {
+  showErr('offer-msg', '');
+  const offer = {
+    id: $('of-id').value ? +$('of-id').value : undefined,
+    title: $('of-title').value, text: $('of-text').value, image: offerImageData, active: true,
+  };
+  try {
+    await api('/api/admin/offers', 'POST', { offer });
+    showOk('offer-msg', 'Offer save ho gaya!');
+    resetOfferForm(); loadAdminData();
+  } catch (e) { showErr('offer-msg', e.message); }
+}
+async function deleteOffer(id) {
+  if (!confirm('Ye offer delete kar dein?')) return;
+  try { await api('/api/admin/offers/delete', 'POST', { id }); loadAdminData(); } catch (e) { alert(e.message); }
+}
+async function toggleOffer(id, on) {
+  try { await api('/api/admin/offers/toggle', 'POST', { id, active: on }); loadAdminData(); } catch (e) { alert(e.message); }
+function renderAdminOffers() {
+  $('admin-offers').innerHTML = ADMIN.offers.map((o) =>
+    '<div class="list-row">' +
+    (o.image ? '<img src="' + o.image + '">' : '<span style="font-size:34px">Gift</span>') +
+    '<div style="flex:1;min-width:140px"><b>' + esc(o.title) + '</b><br><span class="muted">' + esc(o.text || '') + '</span></div>' +
+    '<label class="switch"><input type="checkbox" ' + (o.active ? 'checked' : '') + ' onchange="toggleOffer(' + o.id + ',this.checked)"><span class="slider"></span></label>' +
+    '<button class="btn small ghost" onclick="editOffer(' + o.id + ')">Edit</button>' +
+    '<button class="btn small" onclick="deleteOffer(' + o.id + ')">Delete</button></div>'
+  ).join('') || '<p class="muted">Abhi koi offer nahi hai - pehla offer upar se post karo!</p>';
+}
+// --- Kitchen ---
+const NEXT_STATUS = { placed: 'preparing', preparing: 'ready', ready: 'served' };
+const NEXT_LABEL = { placed: 'Banana Shuru', preparing: 'READY Karo', ready: 'Served Karo' };
+async function loadKitchen() {
+  if (role !== 'admin') return;
+  try {
+    const r = await api('/api/admin/orders');
+    $('kitchen-orders').innerHTML = r.orders.slice().reverse().map((o) =>
+      orderCard(o, true) +
+      '<div class="row-flex" style="margin:-4px 0 12px">' +
+      (NEXT_STATUS[o.status] ? '<button class="btn small gold" onclick="advanceStatus(' + o.id + ',\'' + NEXT_STATUS[o.status] + '\')">' + NEXT_LABEL[o.status] + '</button>' : '') +
+      (!o.paid ? '<button class="btn small" onclick="adminPay(' + o.id + ')">Paid Mark Karo</button>' : '') +
+      '</div>'
+    ).join('') || '<p class="muted">Abhi koi order nahi hai.</p>';
+  } catch (e) {}
+}
+async function advanceStatus(id, status) {
+  try { await api('/api/admin/orders/status', 'POST', { id, status }); loadKitchen(); } catch (e) { alert(e.message); }
+}
+async function adminPay(id) {
+  try { await api('/api/admin/orders/pay', 'POST', { id }); loadKitchen(); } catch (e) { alert(e.message); }
+}
+// --- Customers ---
+function renderAdminCustomers() {
+  $('admin-customers').innerHTML = ADMIN.customers.length
+    ? '<table><tr><th>Naam</th><th>Mobile</th><th>Points</th><th>Total Kharcha</th><th>Member Since</th></tr>' +
+      ADMIN.customers.map((c) => '<tr><td>' + esc(c.name) + '</td><td>' + esc(c.mobile) + '</td><td><b>' + c.points + '</b></td><td>' + rupee(c.totalSpent) + '</td><td>' + esc(c.memberSince) + '</td></tr>').join('') + '</table>'
+    : '<p class="muted">Abhi koi customer nahi hai.</p>';
+}
+// --- Settings ---
+async function saveWifi() {
+  showErr('wifi-msg', '');
+  try {
+    await api('/api/admin/settings', 'POST', { wifiName: $('set-wifi-name').value, wifiPassword: $('set-wifi-pass').value });
+    showOk('wifi-msg', 'Wi-Fi save ho gaya!');
+  } catch (e) { showErr('wifi-msg', e.message); }
+}
+async function changeAdminPw() {
+  showErr('chpw-msg', '');
+  try {
+    await api('/api/admin/change-password', 'POST', { current: $('chpw-cur').value, next: $('chpw-new').value });
+    showOk('chpw-msg', 'Admin password badal gaya!');
+    $('chpw-cur').value = ''; $('chpw-new').value = '';
+  } catch (e) { showErr('chpw-msg', e.message); }
+}
+
+// ================= Init =================
+(async function init() {
+  try { await loadState(); } catch (e) {}
+  if (token && role === 'admin') { enterAdmin().catch(() => showView('gate')); }
+  else if (token && role === 'customer') {
+    try {
+      const r = await api('/api/customer/me');
+      me = r.customer; enterCustomer();
+    } catch (e) { showView('gate'); }
+  } else showView('gate');
+})();
+</script>
+</body>
+</html>
