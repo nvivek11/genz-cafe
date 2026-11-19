@@ -156,7 +156,7 @@
     <button class="social-btn dark" onclick="socialStart('apple')">
       <span></span> Apple Se Login
     </button>
-    <p class="muted" style="font-size:12.5px">ℹ️ Ye demo copy hai — Google/Apple button dabane par seedha setup form khulega (asli OAuth is copy mein nahi hai).</p>
+    
 
     <div id="setup-box" class="hidden">
       <div class="divider">— STEP 2: Apni details bharo —</div>
@@ -498,6 +498,10 @@ async function loadState() {
 // ================= Gate =================
 function socialStart(p) {
   provider = p;
+  if (p === 'google') { window.location.href = '/auth/google'; return; }
+  openSetupBox();
+}
+function openSetupBox() {
   $('setup-box').classList.remove('hidden');
   $('login-box').classList.add('hidden');
   showErr('setup-err', '');
@@ -511,6 +515,7 @@ async function doRegister() {
     const r = await api('/api/customer/register', 'POST', {
       name: $('su-name').value, mobile: $('su-mobile').value,
       password: $('su-pass').value, provider,
+      socialToken: window.SOCIAL_PENDING || '',
     });
     setSession(r.token, 'customer'); me = r.customer;
     enterCustomer();
@@ -951,7 +956,20 @@ async function changeAdminPw() {
 
 // ================= Init =================
 (async function init() {
+  const hash = new URLSearchParams(location.hash.slice(1));
+  if (hash.get('token')) { setSession(hash.get('token'), 'customer'); }
+  if (hash.get('social')) { window.SOCIAL_PENDING = hash.get('social'); }
+  history.replaceState(null, '', location.pathname);
   try { await loadState(); } catch (e) {}
+  if (hash.get('demo')) { provider = 'google'; openSetupBox(); }
+  if (hash.get('socialerror')) { openSetupBox(); showErr('setup-err', 'Google login nahi ho paya - phir se try karo, ya mobile + password se login karo'); }
+  if (window.SOCIAL_PENDING) {
+    openSetupBox();
+    try {
+      const sc = await api('/api/social/session', 'POST', { pending: window.SOCIAL_PENDING });
+      if (sc.name && !$('su-name').value) $('su-name').value = sc.name;
+    } catch (e) { showErr('setup-err', e.message); }
+  }
   if (token && role === 'admin') { enterAdmin().catch(() => showView('gate')); }
   else if (token && role === 'customer') {
     try {
