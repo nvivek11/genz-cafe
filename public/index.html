@@ -232,6 +232,16 @@
     <div id="ctab-menu">
       <div id="offers-wrap" class="hidden">
         <h2 style="color:var(--maroon)">🎁 Aaj Ke Offers</h2>
+        <div class="card center" id="spin-card">
+          <h3 style="color:var(--maroon)">&#127919; Aaj Kya Khaoge?</h3>
+          <p class="muted" style="margin:2px 0">Samajh nahi aa raha kya khayein? Wheel ghumao — menu se dish chune dete hain!</p>
+          <div class="wheel-wrap">
+            <div class="wheel-pointer">&#128315;</div>
+            <div id="dish-wheel"></div>
+          </div>
+          <button class="btn gold" onclick="spinDishWheel()">&#127744; Spin Karo</button>
+          <div id="wheel-result" style="margin-top:8px;font-weight:700;color:var(--maroon)"></div>
+        </div>
         <div id="offers-strip" class="offers-strip"></div>
       </div>
       <div id="cat-chips" class="chips"></div>
@@ -293,11 +303,28 @@
         <p id="tap-msg" class="muted"></p>
       </div>
       <div class="game-box">
-        <h3 style="color:var(--maroon)">🎡 Lucky Spin</h3>
-        <p class="muted">Spin karo aur dekho kismat mein kya hai!</p>
-        <div id="spin-result" style="font-size:52px;min-height:64px">🎡</div>
-        <button class="btn small gold" onclick="luckySpin()">Spin Karo</button>
-        <p id="spin-msg" class="muted"></p>
+        <h3 style="color:var(--maroon)">&#129513; Memory Match</h3>
+        <p class="muted">Cards ulta karke khane ke jode milao — kam moves mein poora karo!</p>
+        <div class="row-flex" style="justify-content:center">
+          <button class="btn small gold" onclick="memStart()">&#9654; Start</button>
+          <span>Moves: <b id="mem-moves">0</b></span>
+          <span>Jode: <b id="mem-pairs">0</b>/6</span>
+        </div>
+        <div id="mem-grid" class="mem-grid"></div>
+        <p id="mem-msg" class="muted"></p>
+      </div>
+      <div class="game-box">
+        <h3 style="color:var(--maroon)">&#129530; Khana Pakdo!</h3>
+        <p class="muted">Tokri ko left-right ghumao aur girta khana pakdo. Golden star = 5 points! 3 miss = game over.</p>
+        <div class="row-flex" style="justify-content:center">
+          <button class="btn small gold" onclick="catchStart()">&#9654; Start</button>
+          <span>Score: <b id="catch-score">0</b></span>
+          <span>Lives: <b id="catch-lives">3</b></span>
+        </div>
+        <div id="catch-area" style="margin-top:10px">
+          <div id="catch-plate" style="left:50%">&#129530;</div>
+        </div>
+        <p id="catch-msg" class="muted"></p>
       </div>
     </div>
   </div>
@@ -627,6 +654,7 @@ function renderOffers() {
   ).join('');
 }
 function renderMenu() {
+  buildWheel();
   const cats = ['Sab'].concat([...new Set(DISHES.map((d) => d.category))]);
   $('cat-chips').innerHTML = cats.map((c) =>
     '<button class="chip' + (c === activeCat ? ' active' : '') + '" onclick="setCat(\'' + esc(c) + '\')">' + esc(c) + '</button>'
@@ -785,48 +813,150 @@ async function doRedeem() {
 }
 // ================= Fun Zone games =================
 let tapTimer = null, tapTimeLeft = 30, tapScore = 0;
-const FOODS = ['Burger', 'Pizza', 'Fries', 'Taco', 'Donut', 'IceCream', 'Sandwich', 'Chicken'];
+const FOODS = ['\u{1F354}', '\u{1F355}', '\u{1F35F}', '\u{1F32E}', '\u{1F369}', '\u{1F366}', '\u{1F35D}', '\u{1F357}'];
+let tapMoveTimer = null;
 function tapGameStart() {
   tapScore = 0; tapTimeLeft = 30;
   $('tap-score').textContent = '0'; $('tap-time').textContent = '30';
-  $('tap-msg').textContent = 'Shuru! Khana tap karo';
+  $('tap-msg').textContent = 'Shuru! Khana tap karo — golden star = 5 points!';
   moveTapTarget();
-  clearInterval(tapTimer);
+  clearInterval(tapTimer); clearInterval(tapMoveTimer);
+  tapMoveTimer = setInterval(() => { if (tapTimeLeft > 0) moveTapTarget(); }, 1100);
   tapTimer = setInterval(() => {
     tapTimeLeft--; $('tap-time').textContent = tapTimeLeft;
     if (tapTimeLeft <= 0) {
-      clearInterval(tapTimer);
+      clearInterval(tapTimer); clearInterval(tapMoveTimer);
       $('tap-target').classList.add('hidden');
-      $('tap-msg').textContent = 'Time khatm! Tumhara score: ' + tapScore;
+      $('tap-msg').textContent = '\u23F0 Time khatm! Tumhara score: ' + tapScore + ' — bahut badhiya! \u{1F389}';
     }
   }, 1000);
 }
 function moveTapTarget() {
   const area = $('tap-area'), t = $('tap-target');
-  t.textContent = FOODS[Math.floor(Math.random() * FOODS.length)];
+  const golden = Math.random() < 0.15;
+  t.textContent = golden ? '\u2B50' : FOODS[Math.floor(Math.random() * FOODS.length)];
+  t.style.fontSize = golden ? '52px' : '';
   t.style.left = Math.random() * (area.clientWidth - 60) + 'px';
   t.style.top = Math.random() * (area.clientHeight - 60) + 'px';
   t.classList.remove('hidden');
 }
 document.addEventListener('click', (e) => {
   if (e.target && e.target.id === 'tap-target' && tapTimeLeft > 0) {
-    tapScore++; $('tap-score').textContent = tapScore; moveTapTarget();
+    tapScore += (e.target.textContent === '\u2B50' ? 5 : 1); $('tap-score').textContent = tapScore; moveTapTarget();
   }
 });
-function luckySpin() {
-  const prizes = ['Free Slice Ki Khushi!', 'Aaj Kismat Chamkegi!', 'Dessert Day!', 'Jackpot Wali Feeling!', 'Chai Pakki!', 'Burger Mood ON!', 'Lucky Star!', 'Surprise Jaldi Milega!'];
-  const el = $('spin-result');
-  let n = 0;
-  const iv = setInterval(() => {
-    el.textContent = FOODS[Math.floor(Math.random() * FOODS.length)];
-    if (++n > 10) {
-      clearInterval(iv);
-      const p = prizes[Math.floor(Math.random() * prizes.length)];
-      el.textContent = 'Spin';
-      $('spin-msg').textContent = p;
-    }
-  }, 90);
+// ---------- Menu Dish Wheel (Aaj Kya Khaoge) ----------
+let wheelDishes = [], wheelRot = 0, wheelSpinning = false;
+const WHEEL_COLORS = ['#ffd98a', '#ffb3a0', '#c8e6a0', '#a0d8ef', '#e6b3e0', '#ffe9a0', '#b3ffd9', '#ffc4d6'];
+function dishNameShort(nm) { return nm.length > 14 ? nm.slice(0, 13) + '...' : nm; }
+function buildWheel() {
+  const w = $('dish-wheel'); if (!w) return;
+  wheelDishes = DISHES.filter((d) => d.available !== false).slice(0, 8);
+  if (wheelDishes.length < 2) { $('spin-card').classList.add('hidden'); return; }
+  $('spin-card').classList.remove('hidden');
+  const n = wheelDishes.length, seg = 360 / n;
+  w.style.background = 'conic-gradient(' + wheelDishes.map((d, i) => WHEEL_COLORS[i % WHEEL_COLORS.length] + ' ' + (i * seg) + 'deg ' + ((i + 1) * seg) + 'deg').join(',') + ')';
+  w.innerHTML = wheelDishes.map((d, i) => '<div class="wheel-label" style="transform:rotate(' + (i * seg + seg / 2) + 'deg) translateY(-102px)">' + esc(dishNameShort(d.name)) + '</div>').join('');
 }
+function spinDishWheel() {
+  if (wheelSpinning || wheelDishes.length < 2) return;
+  wheelSpinning = true;
+  $('wheel-result').textContent = 'Ghoom raha hai...';
+  wheelRot += 360 * 5 + Math.floor(Math.random() * 360);
+  $('dish-wheel').style.transform = 'rotate(' + wheelRot + 'deg)';
+  setTimeout(() => {
+    wheelSpinning = false;
+    const n = wheelDishes.length, seg = 360 / n;
+    const a = (360 - (wheelRot % 360)) % 360;
+    const d = wheelDishes[Math.floor(a / seg) % n];
+    $('wheel-result').innerHTML = 'Aaj ye khao: ' + esc(d.name) + ' — ' + rupee(d.price) + ' &nbsp;<button class="btn small gold" onclick="addToCart(' + d.id + ')">Cart Mein Daalo</button>';
+  }, 4400);
+}
+// ---------- Memory Match ----------
+const MEM_EMOJIS = ['\u{1F354}', '\u{1F355}', '\u{1F35F}', '\u{1F32E}', '\u{1F369}', '\u{1F366}'];
+let memOpen = [], memDone = 0, memMoves = 0, memLock = false;
+function memStart() {
+  const cards = MEM_EMOJIS.concat(MEM_EMOJIS).sort(() => Math.random() - 0.5);
+  memOpen = []; memDone = 0; memMoves = 0; memLock = false;
+  $('mem-moves').textContent = '0'; $('mem-pairs').textContent = '0';
+  $('mem-msg').textContent = 'Card ulta karke jode milao!';
+  $('mem-grid').innerHTML = cards.map((e) => '<button class="mem-card" data-e="' + e + '" onclick="memFlip(this)">?</button>').join('');
+}
+function memFlip(btn) {
+  if (memLock || btn.classList.contains('open') || btn.classList.contains('done')) return;
+  btn.classList.add('open'); btn.textContent = btn.dataset.e;
+  memOpen.push(btn);
+  if (memOpen.length === 2) {
+    memMoves++; $('mem-moves').textContent = memMoves;
+    if (memOpen[0].dataset.e === memOpen[1].dataset.e) {
+      memOpen.forEach((b) => { b.classList.add('done'); b.classList.remove('open'); });
+      memOpen = []; memDone++; $('mem-pairs').textContent = memDone;
+      if (memDone === 6) $('mem-msg').textContent = '\u{1F389} Jeet gaye! Sirf ' + memMoves + ' moves mein saare jode mila liye!';
+    } else {
+      memLock = true;
+      const pair = memOpen; memOpen = [];
+      setTimeout(() => { pair.forEach((b) => { b.classList.remove('open'); b.textContent = '?'; }); memLock = false; }, 700);
+    }
+  }
+}
+// ---------- Khana Pakdo (Catch) ----------
+let catchTimer = null, catchFall = null, catchScore = 0, catchLives = 3, catchX = 50, catchFoods = [];
+function catchStart() {
+  catchScore = 0; catchLives = 3; catchFoods = [];
+  $('catch-score').textContent = '0'; $('catch-lives').textContent = '3';
+  $('catch-msg').textContent = 'Tokri ghumao — ungli ya mouse se!';
+  document.querySelectorAll('.catch-food').forEach((f) => f.remove());
+  clearInterval(catchTimer); clearInterval(catchFall);
+  catchFall = setInterval(spawnFood, 900);
+  catchTimer = setInterval(catchTick, 30);
+}
+function spawnFood() {
+  if (catchLives <= 0) return;
+  const area = $('catch-area'); if (!area) return;
+  const golden = Math.random() < 0.15;
+  const f = document.createElement('div');
+  f.className = 'catch-food';
+  f.textContent = golden ? '\u2B50' : FOODS[Math.floor(Math.random() * FOODS.length)];
+  f.dataset.gold = golden ? '1' : '';
+  f.style.left = (5 + Math.random() * 85) + '%';
+  f.style.top = '-36px';
+  area.appendChild(f);
+  catchFoods.push({ el: f, y: -36, speed: 2 + Math.random() * 2.2 });
+}
+function catchTick() {
+  const area = $('catch-area'); if (!area) return;
+  const H = area.clientHeight, W = area.clientWidth;
+  const plateX = catchX / 100 * W;
+  catchFoods = catchFoods.filter((o) => {
+    o.y += o.speed; o.el.style.top = o.y + 'px';
+    const fx = parseFloat(o.el.style.left) / 100 * W;
+    if (o.y > H - 56 && Math.abs(fx - plateX) < 54) {
+      catchScore += o.el.dataset.gold ? 5 : 1;
+      $('catch-score').textContent = catchScore;
+      o.el.remove(); return false;
+    }
+    if (o.y > H - 8) {
+      o.el.remove();
+      catchLives--; $('catch-lives').textContent = catchLives;
+      if (catchLives <= 0) {
+        clearInterval(catchTimer); clearInterval(catchFall);
+        document.querySelectorAll('.catch-food').forEach((f) => f.remove());
+        catchFoods = [];
+        $('catch-msg').textContent = 'Game over! Tumhara score: ' + catchScore + ' \u{1F389}';
+      }
+      return false;
+    }
+    return true;
+  });
+}
+document.addEventListener('pointermove', (e) => {
+  const area = $('catch-area'); if (!area) return;
+  const fun = $('ctab-fun'); if (!fun || fun.classList.contains('hidden')) return;
+  const r = area.getBoundingClientRect();
+  if (e.clientY < r.top - 40 || e.clientY > r.bottom + 40) return;
+  catchX = Math.min(94, Math.max(6, (e.clientX - r.left) / r.width * 100));
+  $('catch-plate').style.left = catchX + '%';
+});
 // ================= Admin =================
 let ADMIN = { dishes: [], offers: [], customers: [], settings: {} };
 async function enterAdmin() {
