@@ -52,6 +52,14 @@ const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/, '');
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
 const USE_SUPABASE = !!(SUPABASE_URL && SUPABASE_KEY);
 
+// ---------- Google Login (OAuth) ----------
+// GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET env set hon to asli Google login chalta hai.
+// APP_URL = site ka public address (jaise https://genz-cafe-production.up.railway.app)
+const GOOGLE_ID = process.env.GOOGLE_CLIENT_ID || '';
+const GOOGLE_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
+const APP_URL = (process.env.APP_URL || '').replace(/\/+$/, '');
+const socialPending = new Map(); // token -> { googleId, email, name, exp }
+
 function loadLocalData() {
   try {
     const raw = fs.readFileSync(DATA_FILE, 'utf8');
@@ -250,6 +258,13 @@ async function api(req, res, url) {
     return send(res, 200, { token: newSession({ type: 'admin' }) });
   }
 
+  // --- Social (Google) pending session: setup form ke liye naam/email ---
+  if (p === '/api/social/session' && req.method === 'POST') {
+    const pend = socialPending.get(String(body.pending || ''));
+    if (!pend || pend.exp < Date.now()) return send(res, 400, { error: 'Google session khatm - phir se Google login karo' });
+    return send(res, 200, { name: pend.name, email: pend.email });
+  }
+
   // --- Customer register ---
   if (p === '/api/customer/register' && req.method === 'POST') {
     const name = String(body.name || '').trim();
@@ -261,9 +276,21 @@ async function api(req, res, url) {
     if (DB.customers.some((c) => c.mobile === mobile)) {
       return send(res, 400, { error: 'Ye number pehle se registered hai — Login karo' });
     }
+    let googleId = '', googleEmail = '';
+    const pend = body.socialToken ? socialPending.get(String(body.socialToken)) : null;
+    if (pend && pend.exp >= Date.now()) {
+      const existing = DB.customers.find((x) => x.googleId && x.googleId === pend.googleId);
+      if (existing) {
+        socialPending.delete(String(body.socialToken));
+        return send(res, 200, { token: newSession({ type: 'customer', customerId: existing.id }), customer: publicCustomer(existing) });
+      }
+      googleId = pend.googleId; googleEmail = pend.email;
+      socialPending.delete(String(body.socialToken));
+    }
     const c = {
       id: DB.nextId.customer++, name, mobile, passwordHash: hashPassword(pw),
       provider: body.provider === 'apple' ? 'apple' : 'google',
+      googleId, googleEmail,
       points: 0, lifetimePoints: 0, totalSpent: 0,
       memberSince: new Date().toISOString().slice(0, 10), history: [],
     };
@@ -505,9 +532,54 @@ function serveStatic(req, res, url) {
   fs.createReadStream(full).pipe(res);
 }
 
+async function handleGoogleAuth(req, res, url) {
+  const base = APP_URL || ('https://' + (req.headers.host || 'localhost'));
+  const redirectUri = base + '/auth/google/callback';
+  if (url.pathname === '/auth/google') {
+    if (!GOOGLE_ID || !GOOGLE_SECRET) {
+      res.writeHead(302, { Location: '/#demo=google' });
+      return res.end();
+    }
+    const authUrl = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=' + encodeURIComponent(GOOGLE_ID) +
+      '&redirect_uri=' + encodeURIComponent(redirectUri) + '&response_type=code&scope=' +
+      encodeURIComponent('openid email profile') + '&prompt=select_account';
+    res.writeHead(302, { Location: authUrl });
+    return res.end();
+  }
+  const fail = () => { res.writeHead(302, { Location: '/#socialerror=1' }); res.end(); };
+  const code = url.searchParams.get('code');
+  if (!code || !GOOGLE_ID || !GOOGLE_SECRET) return fail();
+  try {
+    const tokRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ code, client_id: GOOGLE_ID, client_secret: GOOGLE_SECRET, redirect_uri: redirectUri, grant_type: 'authorization_code' }),
+    });
+    const tok = await tokRes.json().catch(() => ({}));
+    if (!tok.access_token) return fail();
+    const infoRes = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
+      headers: { Authorization: 'Bearer ' + tok.access_token },
+    });
+    const info = await infoRes.json().catch(() => ({}));
+    if (!info.sub) return fail();
+    const cust = DB.customers.find((x) => x.googleId && x.googleId === info.sub);
+    if (cust) {
+      const t = newSession({ type: 'customer', customerId: cust.id });
+      res.writeHead(302, { Location: '/#token=' + t });
+      return res.end();
+    }
+    const pend = crypto.randomBytes(18).toString('hex');
+    socialPending.set(pend, { googleId: info.sub, email: info.email || '', name: info.name || '', exp: Date.now() + 15 * 60 * 1000 });
+    res.writeHead(302, { Location: '/#social=' + pend });
+    return res.end();
+  } catch (e) { return fail(); }
+}
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
-  if (url.pathname.startsWith('/api/')) {
+  if (url.pathname.startsWith('/auth/google')) {
+    handleGoogleAuth(req, res, url).catch(() => { try { res.writeHead(302, { Location: '/#socialerror=1' }); res.end(); } catch (e) {} });
+  } else if (url.pathname.startsWith('/api/')) {
     api(req, res, url).catch((e) => { console.error(e); send(res, 500, { error: 'Server error' }); });
   } else {
     serveStatic(req, res, url);
